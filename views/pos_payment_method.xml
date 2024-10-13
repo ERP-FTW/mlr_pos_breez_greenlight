@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="pos_payment_method_view_form_inherit_pos_breez" model="ir.ui.view">
+        <field name="name">pos.payment.method.form.inherit.breez</field>
+        <field name="model">pos.payment.method</field>
+        <field name="inherit_id" ref="point_of_sale.pos_payment_method_view_form"/>
+        <field name="arch" type="xml">
+            <xpath expr="//field[@name='use_payment_terminal']" position="after">
+                <group name="crypto_payment">
+                    <field name="api_key" password="True"/>
+                    <field name="breez_invite_code" password="True"/>
+                    <field name="breez_mnemonic" password="True"/>
+                    <field name="breez_payment_type" password="True"/>
+
+                </group>
+                <div colspan="2" class="mt16">
+                    <button name="action_test_connection" type="object" string="Test CryptoPay Server connection" class="oe_highlight"/>
+                </div>
+            </xpath>
+        </field>
+    </record>
+</odoo>
