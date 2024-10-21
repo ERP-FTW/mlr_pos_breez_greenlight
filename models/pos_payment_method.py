@@ -22,20 +22,32 @@ class PosPaymentMethod(models.Model):
     breez_invite_code = fields.Char(string='Breez Invite Code')
     breez_mnemonic = fields.Char(string='Breez Mneomonic')
 
-    def call_breez_api(self,payload,api,method,jwt=0):
+    def call_breez_sdk(self):
         try:
-            _logger.info(f"Called Breez call_breez_api. Passed args are {payload}")
-            request_url = f"{self.server_url}{api}"
-            headers = {"Authorization": "Token %s" % (self.api_key), "Content-Type": "application/json"}
-            _logger.info(f"value of server_url is {request_url} and method is {method} and header is {headers}")
-            if method == "GET":
-                _logger.info(f"value of server_url is {request_url} and method is {method} and header is {headers}")
-                apiRes=requests.request(method="GET", url=request_url, headers=headers)
-                _logger.info(f"value of server_url is {request_url} and method is {method} and header is {headers}")
-            elif method == "POST":
-                apiRes=requests.request(method="POST",url=request_url, data=json.dumps(payload), headers=headers)
-            _logger.info(f"Completed Breez call_breez_api, status {apiRes.status_code}. Passing back {apiRes}")
-            return apiRes
+            _logger.info(f"Called Breez call_breez_sdk1 {self.breez_mnemonic} {self.api_key}")
+            seed = breez_sdk.mnemonic_to_seed(self.breez_mnemonic)
+            config = breez_sdk.default_config(
+                breez_sdk.EnvironmentType.PRODUCTION,
+                self.api_key,
+                breez_sdk.NodeConfig.GREENLIGHT(breez_sdk.GreenlightNodeConfig(None, self.breez_invite_code)))
+            _logger.info(f"Called Breez call_breez_sdk2")
+            # Customize the config object according to your needs
+            config.working_dir = '/opt/breez'
+            print(config.working_dir)
+            _logger.info(f"Called Breez call_breez_sdk3")
+            try:
+                # Connect to the Breez SDK make it ready for use
+                connect_request = breez_sdk.ConnectRequest(config, seed, restore_only=True)
+                sdk_services = breez_sdk.connect(connect_request, SDKListener())
+                logging.info('Starting')
+                return sdk_services
+
+
+            except Exception as error:
+                print(error)
+                logging.error(error)
+                raise
+            return
         except Exception as e:
             _logger.info("API call failure: %s", e.args)
             raise UserError(_("API call failure: %s", e.args))
@@ -43,21 +55,35 @@ class PosPaymentMethod(models.Model):
     def _test_connection(self):
         _logger.info("called Breez check connection")
         if self.use_payment_terminal == 'breez':
-            return self.call_breez_api({},"/api/v1/health","GET")
+            sdk_services = self.call_breez_sdk()
+            node_info = sdk_services.node_info()
+            print(node_info)
+            _logger.info(f"Called Breez call_breez_sdk1 {node_info}")
+            node_info.status_code = 200
+            return node_info
         else:
             return super()._test_connection()
+
     def action_get_conversion_rate(self): #obtains conversion rate from BTCpay server
         try:
-            server_url = self.server_url + "/api/v1/stores/" + self.breez_invite_code + "/rates"
-            headers = {"Authorization": "Token %s" % (self.api_key)}
-            response = requests.request(method="GET", url=server_url, headers=headers)
-            response_json = response.json()
-            _logger.info(f"Called Breez action_get_conversion_rate1. Response is {response_json}")
+            _logger.info(f"Called Breez action_get_conversion_rate1")
+            sdk_services = self.call_breez_sdk()
+            fiat_rates = sdk_services.fetch_fiat_rates()
+            print(type(fiat_rates))
+            print(fiat_rates)
+            #server_url = self.server_url + "/api/v1/stores/" + self.breez_invite_code + "/rates"
+            #headers = {"Authorization": "Token %s" % (self.api_key)}
+            #response = requests.request(method="GET", url=server_url, headers=headers)
+            #response_json = response.json()
+            _logger.info(f"Called Breez action_get_conversion_rate1. Response is {fiat_rates}")
             #response = self.call_breez_api({}, server_url, 'GET')
             #response_json = response.json()
             #_logger.info(f"Called Breez action_get_conversion_rate2. Response is {response_json}")
-            result = response_json[0]['rate'] if response.status_code == 200 else None
-            return result
+            fiat = [o for o in fiat_rates if o.coin == 'USD']
+            for num in fiat:
+                print(f"Currency Rate: {num.value}")
+                return num.value
+            return
         except Exception as e:
             raise UserError(_("Get Conversion Rate: %s", e.args))
 
@@ -85,7 +111,7 @@ class PosPaymentMethod(models.Model):
                 "metadata": {
                     "orderId":str(self.breez_company_name) + " Order: " + str(args.get('order_id'))},
                 "checkout": {
-                    "speedPolicy": str(self.breez_speed_policy),
+                    "speedPolicy": sbreez_expiration_minutestr(self.breez_speed_policy),
                     "expirationMinutes": lightning_expiration_minutes,},
                  "amount": amount_btc,
                 "currency": "BTC",}
@@ -153,12 +179,12 @@ class PosPaymentMethod(models.Model):
             cryptopay_pm = self.env['pos.payment.method'].search([('id', '=', args['pm_id'])], limit=1)
             if cryptopay_pm.use_payment_terminal != 'breez':
                 return super().breez_create_crypto_invoice(args)
-            if cryptopay_pm.crypto_minimum_amount > args['amount']:
-                return {"code": "Below minimum amount of method: " + str(self.env.ref('base.main_company').currency_id.symbol) + str(cryptopay_pm.crypto_minimum_amount)}
-            if cryptopay_pm.crypto_maximum_amount < args['amount']:
-                return {"code": "Above maximum amount of method: " + str(self.env.ref('base.main_company').currency_id.symbol) + str(cryptopay_pm.crypto_maximum_amount)}
-            breez_payment_flow = cryptopay_pm['breez_payment_flow']
-            if breez_payment_flow == 'direct invoice':
+            #if cryptopay_pm.crypto_minimum_amount > args['amount']:
+           #     return {"code": "Below minimum amount of method: " + str(self.env.ref('base.main_company').currency_id.symbol) + str(cryptopay_pm.crypto_minimum_amount)}
+            #if cryptopay_pm.crypto_maximum_amount < args['amount']:
+            #    return {"code": "Above maximum amount of method: " + str(self.env.ref('base.main_company').currency_id.symbol) + str(cryptopay_pm.crypto_maximum_amount)}
+            #breez_payment_flow = cryptopay_pm['breez_payment_flow']
+            if self.breez_payment_type == 'BTC-Lightning':
                 create_invoice_api = cryptopay_pm.breez_create_crypto_invoice_direct_invoice(args)
                 return create_invoice_api
             else:
@@ -222,3 +248,7 @@ class PosPaymentMethod(models.Model):
             return {"code": message}
 
 
+
+class SDKListener(breez_sdk.EventListener):
+    def on_event(self, event):
+        logging.info(event)
