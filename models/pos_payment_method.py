@@ -89,10 +89,13 @@ class PosPaymentMethod(models.Model):
 
     def get_amount_sats(self, pos_payment_obj): #obtains amount of satoshis to invoice by calling action_get_conversion_rate and and doing the math, returns dict of both values
         try:
+            _logger.info(f"Called Breez get_amount_sats1")
             breez_conversion_rate = self.action_get_conversion_rate()
             amount_sats = round((float(pos_payment_obj.get('amount')) / float(breez_conversion_rate)) * 100000000, 1) #conversion to satoshis and rounding to one decimal
             invoiced_info = {'conversion_rate': breez_conversion_rate,
                              'invoiced_sat_amount': amount_sats}
+            _logger.info(f"Called Breez get_amount_sats2 {invoiced_info}")
+
             return invoiced_info #return dictionary with results of both functions
         except Exception as e:
             raise UserError(_("Get Millisat amount: %s", e.args))
@@ -140,31 +143,43 @@ class PosPaymentMethod(models.Model):
         try:
             _logger.info(f"Called Breez breez_create_crypto_invoice_direct_invoice. Passed args are {args}")
             invoiced_info = self.get_amount_sats(args)
-            amount_millisats = invoiced_info['invoiced_sat_amount'] * 1000  # converts sats to millisats as required by breezserver
-            lightning_expiration_minutes = self.breez_expiration_minutes * 60  # conversion of expiration time from min to sec for submission to breez server
-            headers = {"Authorization": "Token %s" % (self.api_key), "Content-Type": "application/json"}
-            if self.breez_selected_crypto == 'lightning':
-                server_url = self.server_url + "/api/v1/stores/" + self.breez_invite_code + "/lightning/BTC/invoices"
-                payload = {
-                    "amount": amount_millisats,
-                    "description": str(self.breez_company_name) + " Order: " + str(args.get('order_id')),
-                    "expiry": lightning_expiration_minutes,}
+            print(type(invoiced_info))
+            amount_millisats = int(invoiced_info['invoiced_sat_amount']) * 100000  # converts sats to millisats as required by breezserver
+            #lightning_expiration_minutes = self.breez_expiration_minutes * 60  # conversion of expiration time from min to sec for submission to breez server
+            #headers = {"Authorization": "Token %s" % (self.api_key), "Content-Type": "application/json"}
+            #if self.breez_selected_crypto == 'lightning':
+            #    server_url = self.server_url + "/api/v1/stores/" + self.breez_invite_code + "/lightning/BTC/invoices"
+            #    payload = {
+            #        "amount": amount_millisats,
+            #        "description": str(self.breez_company_name) + " Order: " + str(args.get('order_id')),
+            #        "expiry": lightning_expiration_minutes,}
             #create_invoice_api = self.call_breez_api(payload, server_url, 'POST')
-            create_invoice_api = requests.request(method="POST", url=server_url, data=json.dumps(payload), headers=headers)
-            _logger.info(create_invoice_api.json())
-            if create_invoice_api.status_code != 200:
-                return {"code": create_invoice_api.status_code}
-            create_invoice_json = create_invoice_api.json()
-            if self.breez_selected_crypto == 'lightning':
-                invoice = create_invoice_json.get('BOLT11')
-                cryptopay_payment_link = 'lightning:' + create_invoice_json.get('BOLT11')
+            #create_invoice_api = requests.request(method="POST", url=server_url, data=json.dumps(payload), headers=headers)
+            #_logger.info(create_invoice_api.json())
+            #if create_invoice_api.status_code != 200:
+            #    return {"code": create_invoice_api.status_code}
+            #create_invoice_json = create_invoice_api.json()
+
+            logging.info(f'order millisat is {amount_millisats}')
+            req = breez_sdk.ReceivePaymentRequest(
+                amount_msat=amount_millisats,
+                description="Invoice for Odoo")
+            sdk_services = self.call_breez_sdk()
+            create_invoice_object = sdk_services.receive_payment(req)
+            print(create_invoice_object)
+            print(type(create_invoice_object))
+            invoice = create_invoice_object.ln_invoice.bolt11
+            logging.info(f'receive_payment_response is {invoice}')
+
+
+            cryptopay_payment_link = 'lightning:' + invoice
             inv_json = {
                 "code": 0,
-                "invoice_id": create_invoice_json.get('id'),
+                "invoice_id": create_invoice_object.ln_invoice.payment_hash,
                 "invoice": invoice,
                 "cryptopay_payment_link": cryptopay_payment_link,
-                "cryptopay_payment_type": 'BTC-' + self.breez_selected_crypto,
-                "crypto_amt": float(create_invoice_json.get('amount'))/1000, }
+                "cryptopay_payment_type": 'BTC-' + self.breez_payment_type,
+                "crypto_amt": float(amount_millisats)/1000, }
             _logger.info(f"Completed Breez breez_create_crypto_invoice_direct_invoice. Passing back {inv_json}")
             return inv_json
         except Exception as e:
@@ -184,7 +199,8 @@ class PosPaymentMethod(models.Model):
             #if cryptopay_pm.crypto_maximum_amount < args['amount']:
             #    return {"code": "Above maximum amount of method: " + str(self.env.ref('base.main_company').currency_id.symbol) + str(cryptopay_pm.crypto_maximum_amount)}
             #breez_payment_flow = cryptopay_pm['breez_payment_flow']
-            if self.breez_payment_type == 'BTC-Lightning':
+            print(f"breez payment type {cryptopay_pm.breez_payment_type}")
+            if cryptopay_pm.breez_payment_type == 'lightning':
                 create_invoice_api = cryptopay_pm.breez_create_crypto_invoice_direct_invoice(args)
                 return create_invoice_api
             else:
